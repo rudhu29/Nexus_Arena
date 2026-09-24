@@ -1050,6 +1050,10 @@
         <span>🎨</span> CUSTOMIZE
       </button>
 
+      <button id="serverStatusIndicator" class="icon-btn" onclick="promptServerConfig()" title="Game Server Connection (Click to configure)" style="border-color: rgba(0, 255, 136, 0.4); color: #00ff88;">
+        🟢 <span style="font-size:11px; font-weight:700;">CONNECTING...</span>
+      </button>
+
       <button id="sfxToggleBtn" class="icon-btn" onclick="toggleAudio()">
         <span id="sfxIcon">🔊</span> SFX
       </button>
@@ -1613,7 +1617,7 @@
 
   <div id="toast" class="toast">Notice message</div>
 
-  <script src="/socket.io/socket.io.js"></script>
+  <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
   <script>
     // Procedural Web Audio API Synthesizer
     class SoundEngine {
@@ -2180,18 +2184,73 @@
     }
 
     // Socket & Match State
-    const socket = io();
+    const defaultRemoteBackend = 'https://three-horses-hammer.loca.lt';
+    const isVercelHost = window.location.hostname.includes('vercel.app');
+    const savedBackend = localStorage.getItem('nexus_custom_backend');
+    
+    // Auto-detect backend target (use active tunnel on Vercel or saved custom URL)
+    let activeServerUrl = savedBackend || (isVercelHost ? defaultRemoteBackend : '');
+    
+    const socketOptions = {
+      transports: ['websocket', 'polling'],
+      reconnectionAttempts: 10,
+      reconnectionDelay: 1000,
+      timeout: 10000
+    };
+    
+    const socket = activeServerUrl ? io(activeServerUrl, socketOptions) : io(socketOptions);
     let currentRoom = null;
     let isHost = false;
     let gameState = null;
     let serverIp = 'localhost';
 
-    fetch('/api/info')
+    function updateServerStatusBadge(status, text, color) {
+      const el = document.getElementById('serverStatusIndicator');
+      if (el) {
+        el.innerHTML = `${status} <span style="font-size:11px; font-weight:700;">${text}</span>`;
+        el.style.borderColor = color + '66';
+        el.style.color = color;
+      }
+    }
+
+    socket.on('connect', () => {
+      console.log('⚡ Connected to Nexus Arena game server via socket ID:', socket.id);
+      updateServerStatusBadge('🟢', 'SERVER ONLINE', '#00ff88');
+    });
+
+    socket.on('connect_error', (err) => {
+      console.warn('Socket connect notice:', err.message);
+      updateServerStatusBadge('🟡', 'CONNECTING...', '#ffd60a');
+    });
+
+    socket.on('disconnect', () => {
+      updateServerStatusBadge('🔴', 'OFFLINE', '#ff4757');
+    });
+
+    function promptServerConfig() {
+      const current = activeServerUrl || location.origin;
+      const val = prompt('Configure Game WebSocket Server URL:\n(Leave empty to use current domain, or paste tunnel / Render.com URL):', current);
+      if (val !== null) {
+        const trimmed = val.trim();
+        if (trimmed) {
+          localStorage.setItem('nexus_custom_backend', trimmed);
+          showToast('Updated Server URL! Reloading...');
+        } else {
+          localStorage.removeItem('nexus_custom_backend');
+          showToast('Reset Server URL to default! Reloading...');
+        }
+        setTimeout(() => location.reload(), 600);
+      }
+    }
+
+    const infoEndpoint = activeServerUrl ? `${activeServerUrl}/api/info` : '/api/info';
+    fetch(infoEndpoint)
       .then(res => res.json())
       .then(data => {
         if (data.localIp) serverIp = data.localIp;
       })
       .catch(() => {});
+
 
     function showView(viewId) {
       document.getElementById('view-home').classList.toggle('hidden', viewId !== 'home');

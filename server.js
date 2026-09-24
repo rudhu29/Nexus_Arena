@@ -13,6 +13,9 @@ const io = new Server(server, {
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 app.use(express.static(PUBLIC_DIR));
+app.get('/', (req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
+});
 
 // Helper: Get local network IPv4 address for cross-device mobile play
 function getLocalIps() {
@@ -2115,16 +2118,19 @@ io.on('connection', socket => {
   });
 });
 
-server.listen(PORT, '0.0.0.0', () => {
-  const ips = getLocalIps();
-  console.log('========================================================');
-  console.log(`⚡ NEXUS ARENA SERVER LIVE ON PORT ${PORT}`);
-  console.log(`🌐 Localhost: http://localhost:${PORT}`);
-  if (ips.length > 0) {
-    console.log(`📱 LAN / Mobile Access (Same WiFi):`);
-    ips.forEach(ip => console.log(`   http://${ip}:${PORT}`));
-  }
-  console.log('========================================================');
-});
+if (require.main === module || !process.env.VERCEL) {
+  server.listen(PORT, '0.0.0.0', () => {
+    const ips = getLocalIps();
+    console.log('========================================================');
+    console.log(`⚡ NEXUS ARENA SERVER LIVE ON PORT ${PORT}`);
+    console.log(`🌐 Localhost: http://localhost:${PORT}`);
+    if (ips.length > 0) {
+      console.log(`📱 LAN / Mobile Access (Same WiFi):`);
+      ips.forEach(ip => console.log(`   http://${ip}:${PORT}`));
+    }
+    console.log('========================================================');
+  });
+}
 
-module.exports = server;
+module.exports = app;
+
