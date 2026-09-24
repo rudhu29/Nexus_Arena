@@ -1618,6 +1618,7 @@
   <div id="toast" class="toast">Notice message</div>
 
   <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
+  <script src="/client-engine.js"></script>
   <script>
     // Procedural Web Audio API Synthesizer
     class SoundEngine {
@@ -2183,26 +2184,78 @@
       }
     }
 
-    // Socket & Match State
-    const defaultRemoteBackend = 'https://calm-planets-visit.loca.lt';
-    const isVercelHost = window.location.hostname.includes('vercel.app');
+    // Socket & Match State with Automatic Virtual Fallback
     const savedBackend = localStorage.getItem('nexus_custom_backend');
-    
-    // Auto-detect backend target (use active tunnel on Vercel or saved custom URL)
-    let activeServerUrl = savedBackend || (isVercelHost ? defaultRemoteBackend : '');
+    let activeServerUrl = savedBackend || '';
     
     const socketOptions = {
       transports: ['websocket', 'polling'],
-      reconnectionAttempts: 10,
+      reconnectionAttempts: 4,
       reconnectionDelay: 1000,
-      timeout: 10000
+      timeout: 5000
     };
     
-    const socket = activeServerUrl ? io(activeServerUrl, socketOptions) : io(socketOptions);
-    let currentRoom = null;
-    let isHost = false;
-    let gameState = null;
-    let serverIp = 'localhost';
+    let rawSocket = null;
+    try {
+      rawSocket = activeServerUrl ? io(activeServerUrl, socketOptions) : io(socketOptions);
+    } catch(e) {
+      console.warn('Real socket initialization notice:', e);
+    }
+
+    let virtualEngine = (typeof window.VirtualArena !== 'undefined') ? new window.VirtualArena() : null;
+
+    // Smart Socket Proxy that dispatches to real socket or virtual engine seamlessly
+    const socket = {
+      handlers: {},
+      useVirtual: false,
+      get id() {
+        return (rawSocket && rawSocket.connected) ? rawSocket.id : (virtualEngine ? virtualEngine.localPlayerId : 'local_player');
+      },
+      get connected() {
+        return (rawSocket && rawSocket.connected) || this.useVirtual;
+      },
+      on(event, fn) {
+        if (!this.handlers[event]) this.handlers[event] = [];
+        this.handlers[event].push(fn);
+        if (rawSocket) {
+          rawSocket.on(event, (data) => {
+            if (!this.useVirtual) fn(data);
+          });
+        }
+      },
+      emit(event, data) {
+        if (rawSocket && rawSocket.connected) {
+          rawSocket.emit(event, data);
+        } else {
+          // Instantly activate Virtual Engine fallback!
+          this.activateVirtual();
+          if (virtualEngine) {
+            virtualEngine.handle(event, data);
+          }
+        }
+      },
+      activateVirtual() {
+        if (!this.useVirtual) {
+          this.useVirtual = true;
+          updateServerStatusBadge('🟢', 'READY (STANDALONE)', '#00f0ff');
+          if (virtualEngine) {
+            virtualEngine.setEmitter((ev, payload) => {
+              if (this.useVirtual && this.handlers[ev]) {
+                this.handlers[ev].forEach(f => f(payload));
+              }
+            });
+          }
+        }
+      }
+    };
+
+    if (virtualEngine) {
+      virtualEngine.setEmitter((ev, payload) => {
+        if (socket.useVirtual && socket.handlers[ev]) {
+          socket.handlers[ev].forEach(f => f(payload));
+        }
+      });
+    }
 
     function updateServerStatusBadge(status, text, color) {
       const el = document.getElementById('serverStatusIndicator');
@@ -2213,19 +2266,34 @@
       }
     }
 
-    socket.on('connect', () => {
-      console.log('⚡ Connected to Nexus Arena game server via socket ID:', socket.id);
-      updateServerStatusBadge('🟢', 'SERVER ONLINE', '#00ff88');
-    });
+    // Set initial badge state
+    updateServerStatusBadge('🟢', 'READY (STANDALONE)', '#00f0ff');
 
-    socket.on('connect_error', (err) => {
-      console.warn('Socket connect notice:', err.message);
-      updateServerStatusBadge('🟡', 'CONNECTING...', '#ffd60a');
-    });
+    if (rawSocket) {
+      rawSocket.on('connect', () => {
+        console.log('⚡ Connected to Nexus Arena game server via socket ID:', rawSocket.id);
+        socket.useVirtual = false;
+        updateServerStatusBadge('🟢', 'MULTIPLAYER ONLINE', '#00ff88');
+      });
 
-    socket.on('disconnect', () => {
-      updateServerStatusBadge('🔴', 'OFFLINE', '#ff4757');
-    });
+      rawSocket.on('connect_error', () => {
+        if (!socket.useVirtual) {
+          updateServerStatusBadge('🟢', 'READY (STANDALONE)', '#00f0ff');
+        }
+      });
+
+      rawSocket.on('disconnect', () => {
+        if (!socket.useVirtual) {
+          updateServerStatusBadge('🟢', 'READY (STANDALONE)', '#00f0ff');
+        }
+      });
+    }
+
+    let currentRoom = null;
+    let isHost = false;
+    let gameState = null;
+    let serverIp = 'localhost';
+
 
     function promptServerConfig() {
       const current = activeServerUrl || location.origin;
